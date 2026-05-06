@@ -87,23 +87,54 @@ def run_spark_consumer():
 
     # Parse the stream
     parsed_stream = parse_stream(raw_stream, schema)
+
     # Process the stream
     from spark.spark_processor import process_stock_data
     processed_stream = process_stock_data(parsed_stream)
-    # Print to console (for testing)
+
+    print("✅ Spark is consuming from Kafka...")
+    print("📊 Saving data to PostgreSQL...")
+    print("-" * 50)
+
+    # ── Write each batch to PostgreSQL ──────────────────
+    def write_to_postgres(batch_df, batch_id):
+        """
+        Called automatically by Spark for each batch.
+        Converts batch to Python records and saves to DB.
+        """
+        from db.db_writer import write_batch
+
+        # Convert Spark DataFrame to list of dicts
+        records = []
+        for row in batch_df.collect():
+            records.append({
+                "symbol":           row["symbol"],
+                "timestamp":        row["timestamp"],
+                "open":             float(row["open"]),
+                "high":             float(row["high"]),
+                "low":              float(row["low"]),
+                "close":            float(row["close"]),
+                "volume":           int(row["volume"]),
+                "price_change":     float(row["price_change"]),
+                "movement":         row["movement"],
+                "price_range":      float(row["price_range"]),
+                "volume_category":  row["volume_category"]
+            })
+
+        if records:
+            count = write_batch(records)
+            print(f"✅ Batch {batch_id} → Saved {count} records to PostgreSQL")
+        else:
+            print(f"⏳ Batch {batch_id} → No new data")
+
+    # Stream to PostgreSQL
     query = (
-        parsed_stream.writeStream
+        processed_stream.writeStream
         .outputMode("append")
-        .format("console")
-        .option("truncate", False)
+        .foreachBatch(write_to_postgres)
         .start()
     )
 
-    print("✅ Spark is consuming from Kafka...")
-    print("📊 Waiting for stock data...")
-    print("-" * 50)
-
-    # Keep running until stopped
     query.awaitTermination()
 
 if __name__ == "__main__":
